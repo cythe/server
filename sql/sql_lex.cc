@@ -3065,6 +3065,9 @@ void st_select_lex::init_query()
   versioned_tables= 0;
   pushdown_select= 0;
   orig_names_of_item_list_elems= 0;
+#ifdef NEW_ITEM_SUBSELECT_RECALC_USED_TABLES
+  outer_references_resolved_here= 0;
+#endif
 }
 
 void st_select_lex::init_select()
@@ -3113,6 +3116,9 @@ void st_select_lex::init_select()
   is_tvc_wrapper= false;
   nest_flags= 0;
   orig_names_of_item_list_elems= 0;
+#ifdef NEW_ITEM_SUBSELECT_RECALC_USED_TABLES
+  outer_references_resolved_here= 0;
+#endif
 }
 
 /*
@@ -3446,9 +3452,15 @@ bool st_select_lex::mark_as_dependent(THD *thd, st_select_lex *last,
     }
 
     Item_subselect *subquery_expr= s->master_unit()->item;
-    if (subquery_expr && subquery_expr->mark_as_dependent(thd, last, 
-                                                          dependency))
-      return TRUE;
+    if (subquery_expr)
+    {
+      if (subquery_expr->mark_as_dependent(thd, last, dependency))
+        return TRUE;
+      if (subquery_expr->min_resolved_nest_level > last->nest_level)
+        subquery_expr->min_resolved_nest_level= last->nest_level;
+      DBUG_PRINT( "info", ("%s ML %d", dbug_print_item(subquery_expr), 
+                                (int) subquery_expr->min_resolved_nest_level));
+    }
   } while ((c= c->get_outer_context()) != NULL &&
            (c->get_select_lex() != last));
   is_correlated= TRUE;
@@ -5190,6 +5202,12 @@ void st_select_lex::remap_tables(TABLE_LIST *derived, table_map map,
   }
 }
 
+#ifdef NEW_ITEM_SUBSELECT_RECALC_USED_TABLES
+extern
+void remove_outer_references_to(List<Item_ident>*list,
+                                 SELECT_LEX *remove_me);
+#endif
+
 /**
   @brief
   Merge a subquery into this select.
@@ -5256,6 +5274,30 @@ bool SELECT_LEX::merge_subquery(THD *thd, TABLE_LIST *derived,
    * parent_lex */
   subq_select->remap_tables(derived, map, table_no, this);
   subq_select->merged_into= this;
+
+#ifdef NEW_ITEM_SUBSELECT_RECALC_USED_TABLES
+  /*
+    References in this->outer_references_resolved_here that are resolved in
+    subq_select need to be removed as they are no longer outer references
+  */
+  remove_outer_references_to(this->outer_references_resolved_here, subq_select);
+  if (subq_select->outer_references_resolved_here)
+  {
+    DBUG_PRINT("info",
+        ("shifting outer_references_resolved_here from select #%d to #%d",
+          subq_select->select_number,
+          this->select_number) );
+    if (!this->outer_references_resolved_here)
+      this->outer_references_resolved_here=
+        subq_select->outer_references_resolved_here;
+    else
+    {
+      this->outer_references_resolved_here->append(
+                                   subq_select->outer_references_resolved_here);
+      subq_select->outer_references_resolved_here= nullptr;
+    }
+  }
+#endif
 
   replace_leaf_table(derived, subq_select->leaf_tables);
 
@@ -12001,3 +12043,50 @@ bool SELECT_LEX_UNIT::explainable() const
                derived->is_materialized_derived() :   // (3)
                false;
 }
+
+
+#ifdef NEW_ITEM_SUBSELECT_RECALC_USED_TABLES
+bool SELECT_LEX::add_outer_reference_resolved_here(THD *thd,
+                                                   Item_ident *original,
+                                                   Item *translated)
+{
+  bool ret= FALSE;
+  // Do not populate opening a view field
+  // if (thd->lex->sql_command == SQLCOM_SHOW_FIELDS)
+  //   return ret;
+
+  /*
+    Only populate outer reference during either conventional execution or
+    on first execution of a prepared statement
+  */
+  if (thd->stmt_arena->state == Query_arena::STMT_CONVENTIONAL_EXECUTION ||
+      thd->stmt_arena->state == Query_arena::STMT_PREPARED)
+  {
+    Query_arena *arena, backup;
+    arena= thd->activate_stmt_arena_if_needed(&backup);
+
+    if (!outer_references_resolved_here)
+    {
+      ret= !(outer_references_resolved_here=
+                  new (thd->mem_root)List<Item_ident>);
+      if (!ret)
+        outer_references_resolved_here->empty();
+    }
+    if (!ret)
+    {
+      Item_ident *to_push= original;
+      if (original->type() == Item::REF_ITEM)
+        to_push->context= &thd->lex->current_select->context;
+      if (translated->type() == Item::REF_ITEM)
+      {
+        to_push= (Item_ident *) translated;
+        to_push->context= &thd->lex->current_select->context;
+      }
+      ret= outer_references_resolved_here->push_back(to_push, thd->mem_root);
+    }
+    if (arena)
+      thd->restore_active_arena(arena, &backup);
+  }
+  return ret;
+}
+#endif

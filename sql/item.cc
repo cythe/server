@@ -5358,8 +5358,8 @@ void mark_select_range_as_dependent(THD *thd, SELECT_LEX *last_select,
     resolving)
   */
   SELECT_LEX *previous_select= current_sel;
-  for (; previous_select->context.outer_select() != last_select;
-       previous_select= previous_select->context.outer_select())
+  for (; previous_select->outer_select() != last_select;
+       previous_select= previous_select->outer_select())
   {
     Item_subselect *prev_subselect_item=
       previous_select->master_unit()->item;
@@ -5732,6 +5732,7 @@ Item_field::fix_outer_field(THD *thd, Field **from_field, Item **reference)
   SELECT_LEX *current_sel= thd->lex->current_select;
   Name_resolution_context *outer_context= 0;
   SELECT_LEX *select= 0;
+
   /* Currently derived tables cannot be correlated */
   if ((current_sel->master_unit()->first_select()->get_linkage() !=
        DERIVED_TABLE_TYPE) &&
@@ -5807,9 +5808,15 @@ Item_field::fix_outer_field(THD *thd, Field **from_field, Item **reference)
                          thd->lex->sql_command != SQLCOM_REPLACE_SELECT));
           }
         }
+#ifdef NEW_ITEM_SUBSELECT_RECALC_USED_TABLES
+        // add_outer_reference_resolved_here(thd,  *reference)
+        select->add_outer_reference_resolved_here(thd, this, *reference);
+#endif
+
         if (*from_field != view_ref_found)
         {
           prev_subselect_item->used_tables_cache|= (*from_field)->table->map;
+          prev_subselect_item->new_used_tables_cache|= (*from_field)->table->map;
           prev_subselect_item->const_item_cache= 0;
           set_field(*from_field);
           if (!last_checked_context->get_select_lex()->having_fix_field &&
@@ -5904,6 +5911,7 @@ Item_field::fix_outer_field(THD *thd, Field **from_field, Item **reference)
       case it does not matter which used tables bits we set)
     */
     prev_subselect_item->used_tables_cache|= OUTER_REF_TABLE_BIT;
+    prev_subselect_item->new_used_tables_cache|= OUTER_REF_TABLE_BIT;
     prev_subselect_item->const_item_cache= 0;
   }
 
@@ -5981,6 +5989,10 @@ Item_field::fix_outer_field(THD *thd, Field **from_field, Item **reference)
     mark_as_dependent(thd, last_checked_context->get_select_lex(),
                       context->get_select_lex(), rf,
                       rf, false);
+#ifdef NEW_ITEM_SUBSELECT_RECALC_USED_TABLES
+    last_checked_context->get_select_lex()->
+      add_outer_reference_resolved_here(thd, rf, *reference);
+#endif
 
     return 0;
   }
@@ -8230,6 +8242,7 @@ bool Item_ref::fix_fields(THD *thd, Item **reference)
                    cached_table->select_lex != outer_context->get_select_lex());
             }
             prev_subselect_item->used_tables_cache|= from_field->table->map;
+            prev_subselect_item->new_used_tables_cache|= from_field->table->map;
             prev_subselect_item->const_item_cache= 0;
             break;
           }
@@ -8238,6 +8251,7 @@ bool Item_ref::fix_fields(THD *thd, Item **reference)
 
         /* Reference is not found => depend on outer (or just error). */
         prev_subselect_item->used_tables_cache|= OUTER_REF_TABLE_BIT;
+        prev_subselect_item->new_used_tables_cache|= OUTER_REF_TABLE_BIT;
         prev_subselect_item->const_item_cache= 0;
 
         outer_context= outer_context->get_outer_context();
@@ -8252,6 +8266,10 @@ bool Item_ref::fix_fields(THD *thd, Item **reference)
         thd->change_item_tree(reference, fld);
         mark_as_dependent(thd, last_checked_context->get_select_lex(),
                           current_sel, fld, fld, false);
+#ifdef NEW_ITEM_SUBSELECT_RECALC_USED_TABLES
+        last_checked_context->get_select_lex()->
+          add_outer_reference_resolved_here(thd, fld, fld);
+#endif
         /*
           A reference is resolved to a nest level that's outer or the same as
           the nest level of the enclosing set function : adjust the value of
@@ -8289,6 +8307,11 @@ bool Item_ref::fix_fields(THD *thd, Item **reference)
           last_checked_context->get_select_lex()->nest_level)
         set_if_bigger(thd->lex->in_sum_func->max_arg_level,
                       last_checked_context->get_select_lex()->nest_level);
+#ifdef NEW_ITEM_SUBSELECT_RECALC_USED_TABLES
+      // add_outer_reference_resolved_here(thd, this)
+      last_checked_context->get_select_lex()->
+        add_outer_reference_resolved_here(thd, this, *ref);
+#endif
     }
   }
 

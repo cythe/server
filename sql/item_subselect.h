@@ -178,6 +178,7 @@ public:
   virtual void reset()
   {
     eliminated= FALSE;
+    min_resolved_nest_level= INT_MAX;
     null_value= 1;
   }
   /**
@@ -210,6 +211,7 @@ public:
   void make_const()
   { 
     used_tables_cache= 0;
+    new_used_tables_cache= 0;
     const_item_cache= 0;
     forced_const= TRUE; 
   }
@@ -218,6 +220,7 @@ public:
   table_map not_null_tables() const override { return 0; }
   bool const_item() const override;
   inline table_map get_used_tables_cache() { return used_tables_cache; }
+  int min_resolved_nest_level;  // ML
   Item *get_tmp_table_item(THD *thd) override;
   void update_used_tables() override;
   void print(String *str, enum_query_type query_type) override;
@@ -410,6 +413,7 @@ public:
   void reset() override
   {
     eliminated= FALSE;
+    min_resolved_nest_level= INT_MAX;
     value= 0;
   }
   void no_rows_in_result() override;
@@ -641,6 +645,7 @@ public:
   void reset() override
   {
     eliminated= FALSE;
+    min_resolved_nest_level= INT_MAX;
     value= 0;
     null_value= 0;
     was_null= 0;

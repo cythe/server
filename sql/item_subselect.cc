@@ -344,7 +344,10 @@ bool Item_subselect::fix_fields(THD *thd_param, Item **ref)
   {
     const_item_cache= 0;
     if (uncacheable & UNCACHEABLE_RAND)
+    {
       used_tables_cache|= RAND_TABLE_BIT;
+      new_used_tables_cache|= RAND_TABLE_BIT;
+    }
   }
   fixed= 1;
 
@@ -485,6 +488,39 @@ public:
 };
 
 
+/**
+  Check whether a Field Item 'belongs' to a unit.
+  The Field Item is an outer reference, we search from the SELECT_LEX
+  where the item is defined, outwards until a limit, checking whether
+  that select_lex is part of a unit.
+
+  @param item    search item
+  @param search  test unit
+  @param limit   outermost select_lex to search
+
+  @return
+    FALSE if item doesn't belong to unit
+    TRUE  if it does
+*/
+
+bool Item_belongs_to( Item_ident *item, 
+                      SELECT_LEX_UNIT *search,
+                      SELECT_LEX *limit )
+{
+  SELECT_LEX *defined= item->context->get_select_lex();
+
+  do
+  {
+    if (defined->master_unit() == search)
+      return TRUE;
+
+    defined= defined->outer_select();
+  } while (defined && (defined != limit));
+
+  return FALSE;
+}
+
+
 /*
   Recalculate used_tables_cache 
 */
@@ -494,8 +530,13 @@ void Item_subselect::recalc_used_tables(st_select_lex *new_parent,
 {
   List_iterator_fast<Ref_to_outside> it(upper_refs);
   Ref_to_outside *upper;
+
+  if (thd->stmt_arena->state == Query_arena::STMT_EXECUTED)
+    return;
+
   DBUG_ENTER("recalc_used_tables");
-  
+
+  DBUG_PRINT("info", ("select #%d", unit->first_select()->select_number));
   used_tables_cache= 0;
   while ((upper= it++))
   {
@@ -553,7 +594,53 @@ void Item_subselect::recalc_used_tables(st_select_lex *new_parent,
     he has done const table detection, and that will be our chance to update
     const_tables_cache.
   */
-  DBUG_PRINT("exit", ("used_tables_cache: %llx", used_tables_cache));
+  DBUG_PRINT("info", ("used_tables_cache: %llx", used_tables_cache));
+
+#ifdef NEW_ITEM_SUBSELECT_RECALC_USED_TABLES
+  // New implementation (MDEV-32294)
+  new_used_tables_cache= (min_resolved_nest_level < new_parent->nest_level) ?
+                            OUTER_REF_TABLE_BIT : 0;
+
+  // Aside from the above bit, only Items resolved in the parent are involved 
+  // the calculation of used_tables_cache, these are populated and maintained
+  // in SELECT_LEX::outer_references_resolved_here
+  if (new_parent->outer_references_resolved_here)
+  {
+    List_iterator<Item_ident> it(*new_parent->outer_references_resolved_here);
+    Item_ident* item;
+    while ((item= it++))
+    {
+      // Only items that 'belong' to this->unit are to be used in the map
+      if (!Item_belongs_to( item, unit, new_parent))
+        continue;
+
+      // extract the field from the Item
+      item= (Item_ident *)item->real_item();
+
+      // collect usage of Item_fields within this expression
+      Field_fixer collector;
+      collector.used_tables= 0;
+      collector.new_parent= new_parent;
+      item->walk(&Item::enumerate_field_refs_processor, 0, &collector);
+      new_used_tables_cache |= collector.used_tables;
+    }
+  }
+
+  DBUG_PRINT("info", ("new_used_tables_cache: %llx", new_used_tables_cache));
+
+#if 0
+  // any differences will simply crash
+  // due to a bug in Item_exists_subselect::exists2in_processor, not removing
+  // items that are no longer outer items, this isn't reliable.
+  DBUG_ASSERT( new_used_tables_cache == used_tables_cache );
+#endif
+
+#if 0
+  // any differences may cause a wrong result
+  used_tables_cache= new_used_tables_cache;
+#endif
+#endif
+
   DBUG_VOID_RETURN;
 }
 
@@ -3539,6 +3626,7 @@ void Item_in_subselect::fix_after_pullout(st_select_lex *new_parent,
   left_expr->fix_after_pullout(new_parent, &left_expr, merge);
   Item_subselect::fix_after_pullout(new_parent, ref, merge);
   used_tables_cache |= left_expr->used_tables();
+  new_used_tables_cache |= left_expr->used_tables();
 }
 
 void Item_in_subselect::update_used_tables()
@@ -3547,6 +3635,7 @@ void Item_in_subselect::update_used_tables()
   left_expr->update_used_tables();
   //used_tables_cache |= left_expr->used_tables();
   used_tables_cache= Item_subselect::used_tables() | left_expr->used_tables();
+  new_used_tables_cache= Item_subselect::used_tables() | left_expr->used_tables();
 }
 
 
