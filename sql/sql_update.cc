@@ -450,6 +450,8 @@ bool Sql_cmd_update::update_single_table(THD *thd)
     conds= conds->top_level_transform(thd, &Item::varchar_upper_cmp_transformer,
                                           (uchar *) 0);
   }
+  if (conds)
+    substitute_indexed_vcols_for_table(table, conds);
 
   // Don't count on usage of 'only index' when calculating which key to use
   table->covering_keys.clear_all();

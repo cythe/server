@@ -2419,6 +2419,8 @@ JOIN::optimize_inner()
           thd, &Item::varchar_upper_cmp_transformer);
   }
 
+  substitute_indexed_vcols_for_join(this);
+
   conds= optimize_cond(this, conds, join_list, ignore_on_expr,
                        &cond_value, &cond_equal, OPT_LINK_EQUAL_FIELDS);
 

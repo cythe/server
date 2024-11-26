@@ -487,6 +487,8 @@ bool Sql_cmd_delete::delete_from_single_table(THD *thd)
     conds= conds->top_level_transform(thd, &Item::varchar_upper_cmp_transformer,
                                           (uchar *) 0);
   }
+  if (conds)
+    substitute_indexed_vcols_for_table(table, conds);
 
 #ifdef WITH_PARTITION_STORAGE_ENGINE
   if (prune_partitions(thd, table, conds))
