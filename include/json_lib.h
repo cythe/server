@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#define JSON_DEPTH_DEFAULT 32
+#define JSON_DEPTH_DEFAULT 3
 #define JSON_DEPTH_LIMIT JSON_DEPTH_DEFAULT /* Still used in column store. */
 #define BLOCK_SIZE_JSON_DYN_ARRAY 4096
 
