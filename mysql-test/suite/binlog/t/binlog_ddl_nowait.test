@@ -1,0 +1,77 @@
+# DDL binlogging is the same regardless of binlog format
+--source include/have_binlog_format_mixed.inc
+
+--echo *** MDEV-31756: WAIT/NOWAIT in DDL makes binary logs difficult or impossible to replay
+
+--connection default
+--let $datadir= `select @@datadir`
+RESET MASTER;
+
+--let $file= query_get_value(SHOW MASTER STATUS, File, 1)
+--let $pos0= query_get_value(SHOW MASTER STATUS, Position, 1)
+CREATE TABLE t1 (a int PRIMARY KEY) ENGINE=MyISAM;
+--let $pos1= query_get_value(SHOW MASTER STATUS, Position, 1)
+ALTER TABLE t1 WAIT +0.0 ADD b INT;
+ALTER TABLE t1 WAIT +4.3 ADD c INT;
+INSERT INTO t1(a,b) VALUES (1,1), (2,1), (3,2), (4,3), (5, 5), (6, 8), (7, 13);
+--let $pos2= query_get_value(SHOW MASTER STATUS, Position, 1)
+CREATE INDEX b_idx ON t1(b) WAIT 0;
+OPTIMIZE TABLE t1 NOWAIT;
+TRUNCATE TABLE t1 NOWAIT;
+--let $pos3= query_get_value(SHOW MASTER STATUS, Position, 1)
+DROP INDEX b_idx ON t1 WAIT 0;
+--let $pos4= query_get_value(SHOW MASTER STATUS, Position, 1)
+RENAME TABLE t1 NOWAIT TO t2;
+DROP TABLE t2 WAIT 1;
+
+
+# Test that we can mysqlbinlog|mysql the DDL even though it has to wait for
+# the table lock for a short while.
+#
+# This is very prone to races of course, but that is ok. The case we want to
+# test is when mysqbinlog|mysql runs while the table lock is held, and that
+# will be the case "most" of the time. If we race and the lock is not held,
+# it just means the test is ineffective, it will still pass.
+
+--connection default
+FLUSH BINARY LOGS;
+--exec $MYSQL_BINLOG --start-position=$pos0 --stop-position=$pos1 $datadir/master-bin.000001 | $MYSQL test
+SHOW CREATE TABLE t1;
+
+connect (con1,localhost,root,,);
+send INSERT INTO t1(a) VALUES (0*SLEEP(0.2));
+
+--connection default
+--exec $MYSQL_BINLOG --start-position=$pos1 --stop-position=$pos2 $datadir/master-bin.000001 | $MYSQL test
+SHOW CREATE TABLE t1;
+
+--connection con1
+reap;
+send INSERT INTO t1(a) VALUES (0*SLEEP(0.2) + 100);
+
+--connection default
+--exec $MYSQL_BINLOG --start-position=$pos2 --stop-position=$pos3 $datadir/master-bin.000001 | $MYSQL test
+SHOW CREATE TABLE t1;
+
+--connection con1
+reap;
+send INSERT INTO t1(a) VALUES (0*SLEEP(0.2) + 200);
+
+--connection default
+--exec $MYSQL_BINLOG --start-position=$pos3 --stop-position=$pos4 $datadir/master-bin.000001 | $MYSQL test
+SHOW CREATE TABLE t1;
+
+--connection con1
+reap;
+--disconnect con1
+--connection default
+
+# Check that there is no WAIT <n> or NOWAIT in binlogged queries.
+--exec $MYSQL_BINLOG $datadir/master-bin.000001 >$MYSQL_TMP_DIR/mdev31756.text
+--let SEARCH_FILE= $MYSQL_TMP_DIR/mdev31756.text
+--let SEARCH_PATTERN= WAIT
+--let SEARCH_ABORT= FOUND
+--source include/search_pattern_in_file.inc
+--remove_file $MYSQL_TMP_DIR/mdev31756.text
+
+DROP TABLE t1;

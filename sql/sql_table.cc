@@ -996,6 +996,23 @@ end:
 }
 
 
+/**
+  Create a new query string for DDL with the WAIT <n> or NOWAIT option removed.
+  This option should not be in the binlog, as a query that succeeded on the
+  master _must_ also succeed on the slave, even if it needs to wait.
+*/
+static int
+create_stmt_without_nowait(THD *thd, String *buf)
+{
+  if (buf->append(thd->query(), thd->query_length()) ||
+      buf->replace(thd->lex->ddl_wait_nowait_begin_offset,
+                   thd->lex->ddl_wait_nowait_end_offset -
+                   thd->lex->ddl_wait_nowait_begin_offset, NULL, 0))
+    return 1;
+  return 0;
+}
+
+
 /*
   SYNOPSIS
     write_bin_log()
@@ -1035,9 +1052,43 @@ int write_bin_log(THD *thd, bool clear_error,
     }
     else
       errcode= query_error_code(thd, TRUE);
-    error= thd->binlog_query(THD::STMT_QUERY_TYPE,
-                             query, query_length, is_trans, FALSE, FALSE,
-                             errcode) > 0;
+
+    /* Remove any NOWAIT or WAIT <n> from DDL. */
+    String log_query;
+    switch(thd->lex->sql_command)
+    {
+    case SQLCOM_TRUNCATE:
+    case SQLCOM_DROP_INDEX:
+    case SQLCOM_RENAME_TABLE:
+    case SQLCOM_OPTIMIZE:
+    case SQLCOM_ALTER_TABLE:
+    case SQLCOM_CREATE_INDEX:
+      /* DROP TABLE is binlogged with a rewritten query, so omitted here. */
+      if ((thd->lex->alter_info.flags & ALTER_WAIT_NOWAIT))
+      {
+        if (create_stmt_without_nowait(thd, &log_query))
+        {
+          sql_print_error("Event Error: An error occurred while creating query "
+                          "string for DDL with NOWAIT/WAIT removed, before "
+                          "writing it into binary log.");
+          error= 1;
+        }
+        else
+        {
+          query= log_query.c_ptr();
+          query_length= log_query.length();
+        }
+      }
+      break;
+
+    default:
+      ;  /* Nothing */
+    }
+
+    if (!error)
+      error= thd->binlog_query(THD::STMT_QUERY_TYPE,
+                               query, query_length, is_trans, FALSE, FALSE,
+                               errcode) > 0;
     thd_proc_info(thd, 0);
   }
   return error;

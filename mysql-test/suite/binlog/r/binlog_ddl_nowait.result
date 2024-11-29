@@ -1,0 +1,64 @@
+*** MDEV-31756: WAIT/NOWAIT in DDL makes binary logs difficult or impossible to replay
+connection default;
+RESET MASTER;
+CREATE TABLE t1 (a int PRIMARY KEY) ENGINE=MyISAM;
+ALTER TABLE t1 WAIT +0.0 ADD b INT;
+ALTER TABLE t1 WAIT +4.3 ADD c INT;
+INSERT INTO t1(a,b) VALUES (1,1), (2,1), (3,2), (4,3), (5, 5), (6, 8), (7, 13);
+CREATE INDEX b_idx ON t1(b) WAIT 0;
+OPTIMIZE TABLE t1 NOWAIT;
+Table	Op	Msg_type	Msg_text
+test.t1	optimize	status	OK
+TRUNCATE TABLE t1 NOWAIT;
+DROP INDEX b_idx ON t1 WAIT 0;
+RENAME TABLE t1 NOWAIT TO t2;
+DROP TABLE t2 WAIT 1;
+connection default;
+FLUSH BINARY LOGS;
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int(11) NOT NULL,
+  PRIMARY KEY (`a`)
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+connect  con1,localhost,root,,;
+INSERT INTO t1(a) VALUES (0*SLEEP(0.2));
+connection default;
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int(11) NOT NULL,
+  `b` int(11) DEFAULT NULL,
+  `c` int(11) DEFAULT NULL,
+  PRIMARY KEY (`a`)
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+connection con1;
+INSERT INTO t1(a) VALUES (0*SLEEP(0.2) + 100);
+connection default;
+Table	Op	Msg_type	Msg_text
+test.t1	optimize	status	OK
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int(11) NOT NULL,
+  `b` int(11) DEFAULT NULL,
+  `c` int(11) DEFAULT NULL,
+  PRIMARY KEY (`a`),
+  KEY `b_idx` (`b`)
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+connection con1;
+INSERT INTO t1(a) VALUES (0*SLEEP(0.2) + 200);
+connection default;
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `a` int(11) NOT NULL,
+  `b` int(11) DEFAULT NULL,
+  `c` int(11) DEFAULT NULL,
+  PRIMARY KEY (`a`)
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+connection con1;
+disconnect con1;
+connection default;
+NOT FOUND /WAIT/ in mdev31756.text
+DROP TABLE t1;

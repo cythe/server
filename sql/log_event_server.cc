@@ -1590,6 +1590,7 @@ int Query_log_event::handle_split_alter_query_log_event(rpl_group_info *rgi,
       */
       rgi->reserved_start_alter_thread= false;
       thd->lex->sql_command= SQLCOM_ALTER_TABLE;
+      thd->lex->alter_info.reset();
       Write_log_with_flags wlwf(thd, Gtid_log_event::FL_START_ALTER_E1,
                                 true /* wsrep to isolation end */);
 #ifdef WITH_WSREP
@@ -1728,6 +1729,7 @@ write_binlog:
   }
   {
     thd->lex->sql_command= SQLCOM_ALTER_TABLE;
+    thd->lex->alter_info.reset();
     Write_log_with_flags wlwf(thd, is_CA ? Gtid_log_event::FL_COMMIT_ALTER_E1 :
                               Gtid_log_event::FL_ROLLBACK_ALTER_E1,
                               true);

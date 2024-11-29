@@ -201,6 +201,7 @@ void _CONCAT_UNDERSCORED(turn_parser_debug_on,yyparse)()
 
   /* structs */
   LEX_CSTRING lex_str;
+  Lex_string_with_pos_st lex_str_with_pos;
   Lex_ident_cli_st kwd;
   Lex_ident_cli_st ident_cli;
   Lex_ident_sys_st ident_sys;
@@ -1316,15 +1317,17 @@ bool my_yyoverflow(short **a, YYSTYPE **b, size_t *yystacksize);
 %right INTO
 
 %type <lex_str>
-        DECIMAL_NUM FLOAT_NUM NUM LONG_NUM
-        HEX_NUM HEX_STRING
-        LEX_HOSTNAME ULONGLONG_NUM field_ident select_alias ident_or_text
+        HEX_STRING
+        LEX_HOSTNAME field_ident select_alias ident_or_text
         TEXT_STRING_sys TEXT_STRING_literal
         key_cache_name
         sp_opt_label BIN_NUM TEXT_STRING_filesystem
         opt_constraint constraint opt_ident
         sp_block_label sp_control_label opt_place opt_db
         udt_name
+
+%type <lex_str_with_pos>
+        DECIMAL_NUM FLOAT_NUM NUM LONG_NUM HEX_NUM ULONGLONG_NUM
 
 %type <ident_sys>
         IDENT_sys
@@ -8442,6 +8445,7 @@ rename:
           RENAME table_or_tables opt_if_exists
           {
             Lex->sql_command= SQLCOM_RENAME_TABLE;
+            Lex->alter_info.reset();
             Lex->create_info.set($3);
             if (Lex->main_select_push())
               MYSQL_YYABORT;
@@ -12747,12 +12751,41 @@ int_num:
         ;
 
 ulong_num:
-          opt_plus NUM           { int error; $$= (ulong) my_strtoll10($2.str, (char**) 0, &error); }
-        | HEX_NUM       { $$= strtoul($1.str, (char**) 0, 16); }
-        | opt_plus LONG_NUM      { int error; $$= (ulong) my_strtoll10($2.str, (char**) 0, &error); }
-        | opt_plus ULONGLONG_NUM { int error; $$= (ulong) my_strtoll10($2.str, (char**) 0, &error); }
-        | opt_plus DECIMAL_NUM   { int error; $$= (ulong) my_strtoll10($2.str, (char**) 0, &error); }
-        | opt_plus FLOAT_NUM     { int error; $$= (ulong) my_strtoll10($2.str, (char**) 0, &error); }
+          opt_plus NUM
+          {
+            int error;
+            $$= (ulong) my_strtoll10($2.str, (char**) 0, &error);
+            Lex->last_lex_end_pos= $2.start_pos + (uint)$2.length;
+          }
+        | HEX_NUM
+          {
+            $$= strtoul($1.str, (char**) 0, 16);
+            Lex->last_lex_end_pos= $1.start_pos + (uint)$1.length;
+          }
+        | opt_plus LONG_NUM
+          {
+            int error;
+            $$= (ulong) my_strtoll10($2.str, (char**) 0, &error);
+            Lex->last_lex_end_pos= $2.start_pos + (uint)$2.length;
+          }
+        | opt_plus ULONGLONG_NUM
+          {
+            int error;
+            $$= (ulong) my_strtoll10($2.str, (char**) 0, &error);
+            Lex->last_lex_end_pos= $2.start_pos + (uint)$2.length;
+          }
+        | opt_plus DECIMAL_NUM
+          {
+            int error;
+            $$= (ulong) my_strtoll10($2.str, (char**) 0, &error);
+            Lex->last_lex_end_pos= $2.start_pos + (uint)$2.length;
+          }
+        | opt_plus FLOAT_NUM
+        {
+          int error;
+          $$= (ulong) my_strtoll10($2.str, (char**) 0, &error);
+          Lex->last_lex_end_pos= $2.start_pos + (uint)$2.length;
+        }
         ;
 
 real_ulong_num:
@@ -12999,7 +13032,11 @@ drop:
           {}
         | DROP INDEX_SYM
           {
-            if (Lex->main_select_push())
+            LEX *lex=Lex;
+            lex->sql_command= SQLCOM_DROP_INDEX;
+            lex->alter_info.reset();
+            lex->alter_info.flags= ALTER_DROP_INDEX;
+            if (lex->main_select_push())
               MYSQL_YYABORT;
           }
           opt_if_exists_table_element ident ON table_ident opt_lock_wait_timeout
@@ -13009,16 +13046,13 @@ drop:
                              Alter_drop(Alter_drop::KEY, $5.str, $4));
             if (unlikely(ad == NULL))
               MYSQL_YYABORT;
-            lex->sql_command= SQLCOM_DROP_INDEX;
-            lex->alter_info.reset();
-            lex->alter_info.flags= ALTER_DROP_INDEX;
             lex->alter_info.drop_list.push_back(ad, thd->mem_root);
             if (unlikely(!lex->current_select->
                          add_table_to_list(thd, $7, NULL, TL_OPTION_UPDATING,
                                            TL_READ_NO_INSERT,
                                            MDL_SHARED_UPGRADABLE)))
               MYSQL_YYABORT;
-            Lex->pop_select(); //main select
+            lex->pop_select(); //main select
           }
         | DROP DATABASE opt_if_exists ident
           {
@@ -17119,12 +17153,20 @@ opt_lock_wait_timeout:
         {}
         | WAIT_SYM ulong_num
         {
+          LEX *lex= Lex;
+	  lex->alter_info.flags|= ALTER_WAIT_NOWAIT;
+          lex->ddl_wait_nowait_begin_offset= (uint)($1.pos() - thd->query());
+          lex->ddl_wait_nowait_end_offset= lex->last_lex_end_pos;
           if (unlikely(set_statement_var_if_exists(thd, STRING_WITH_LEN("lock_wait_timeout"), $2)) ||
               unlikely(set_statement_var_if_exists(thd, STRING_WITH_LEN("innodb_lock_wait_timeout"), $2)))
             MYSQL_YYABORT;
         }
         | NOWAIT_SYM
         {
+          LEX *lex= Lex;
+	  lex->alter_info.flags|= ALTER_WAIT_NOWAIT;
+          lex->ddl_wait_nowait_begin_offset= (uint)($1.pos() - thd->query());
+          lex->ddl_wait_nowait_end_offset= (uint)($1.end() - thd->query());
           if (unlikely(set_statement_var_if_exists(thd, STRING_WITH_LEN("lock_wait_timeout"), 0)) ||
               unlikely(set_statement_var_if_exists(thd, STRING_WITH_LEN("innodb_lock_wait_timeout"), 0)))
             MYSQL_YYABORT;

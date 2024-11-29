@@ -103,6 +103,12 @@ public:
 };
 
 
+struct Lex_string_with_pos_st: public LEX_CSTRING
+{
+  uint start_pos;
+};
+
+
 /*
   Used to store identifiers in the client character set.
   Points to a query fragment.
@@ -2863,6 +2869,7 @@ private:
   int find_keyword(Lex_ident_cli_st *str, uint len, bool function) const;
   int find_keyword_qualified_special_func(Lex_ident_cli_st *str, uint len) const;
   LEX_CSTRING get_token(uint skip, uint length);
+  Lex_string_with_pos_st get_token_with_pos(uint skip, uint length);
   int scan_ident_start(THD *thd, Lex_ident_cli_st *str);
   int scan_ident_middle(THD *thd, Lex_ident_cli_st *str,
                         CHARSET_INFO **cs, my_lex_states *);
@@ -3540,6 +3547,12 @@ public:
   */
   uint table_count_update;
 
+  /*
+    Used to remember a character position during parsing, eg. the end of
+    ulong_num for ddl_wait_nowait_end_offset.
+  */
+  uint last_lex_end_pos;
+
   uint8 describe;
   /*
     A flag that indicates what kinds of derived tables are present in the
@@ -3585,15 +3598,22 @@ public:
     keyword_delayed_begin_offset is the offset to the beginning of the DELAYED
     keyword in INSERT DELAYED statement. keyword_delayed_end_offset is the
     offset to the character right after the DELAYED keyword.
+
+    Similarly, ddl_wait_nowait_begin_offset and ddl_wait_nowait_end_offset mark
+    the start and end of the "NOWAIT" or "WAIT <number>" (including last
+    character of <number>) option for ALTER TABLE and similar statements. These
+    are valid when alter_info.flags contains ALTER_WAIT_NOWAIT.
   */
   union {
     const char *stmt_definition_begin;
     uint keyword_delayed_begin_offset;
+    uint ddl_wait_nowait_begin_offset;
   };
 
   union {
     const char *stmt_definition_end;
     uint keyword_delayed_end_offset;
+    uint ddl_wait_nowait_end_offset;
   };
 
   /**

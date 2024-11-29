@@ -1557,6 +1557,19 @@ LEX_CSTRING Lex_input_stream::get_token(uint skip, uint length)
 }
 
 
+Lex_string_with_pos_st
+Lex_input_stream::get_token_with_pos(uint skip, uint length)
+{
+  LEX_CSTRING tmp;
+  Lex_string_with_pos_st out;
+  out.start_pos= (uint)(m_tok_start + skip - get_buf());
+  tmp= get_token(skip, length);
+  out.str= tmp.str;
+  out.length= tmp.length;
+  return out;
+}
+
+
 static size_t
 my_unescape(CHARSET_INFO *cs, char *to, const char *str, const char *end,
             int sep, bool backslash_escapes)
@@ -2193,7 +2206,7 @@ int Lex_input_stream::lex_one_token(YYSTYPE *yylval, THD *thd)
           if ((yyLength() >= 3) && !ident_map[c])
           {
             /* skip '0x' */
-            yylval->lex_str= get_token(2, yyLength() - 2);
+            yylval->lex_str_with_pos= get_token_with_pos(2, yyLength() - 2);
             return (HEX_NUM);
           }
           yyUnget();
@@ -2233,7 +2246,7 @@ int Lex_input_stream::lex_one_token(YYSTYPE *yylval, THD *thd)
           {
             yySkip();
             while (my_isdigit(cs, yyGet())) ;
-            yylval->lex_str= get_token(0, yyLength());
+            yylval->lex_str_with_pos= get_token_with_pos(0, yyLength());
             return(FLOAT_NUM);
           }
         }
@@ -2272,8 +2285,9 @@ int Lex_input_stream::lex_one_token(YYSTYPE *yylval, THD *thd)
           - the number is either not followed by a dot at all, or
           - the number is followed by a double dot as in: FOR i IN 1..10
         */
-        yylval->lex_str= get_token(0, yyLength());
-        return int_token(yylval->lex_str.str, (uint) yylval->lex_str.length);
+        yylval->lex_str_with_pos= get_token_with_pos(0, yyLength());
+        return int_token(yylval->lex_str_with_pos.str,
+                         (uint) yylval->lex_str_with_pos.length);
       }
       // fall through
     case MY_LEX_REAL:                           // Incomplete real number
@@ -2287,10 +2301,10 @@ int Lex_input_stream::lex_one_token(YYSTYPE *yylval, THD *thd)
         if (!my_isdigit(cs, c))
 	  return ABORT_SYM; // No digit after sign
         while (my_isdigit(cs, yyGet())) ;
-        yylval->lex_str= get_token(0, yyLength());
+        yylval->lex_str_with_pos= get_token_with_pos(0, yyLength());
         return(FLOAT_NUM);
       }
-      yylval->lex_str= get_token(0, yyLength());
+      yylval->lex_str_with_pos= get_token_with_pos(0, yyLength());
       return(DECIMAL_NUM);
 
     case MY_LEX_HEX_NUMBER:             // Found x'hexstring'
