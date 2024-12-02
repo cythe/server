@@ -123,6 +123,10 @@ FUNCTION(GENERATE_SBOM)
 
   IF(TARGET libfmt)
     ExternalProject_GET_PROPERTY(libfmt URL)
+    IF(NOT ("${URL}" MATCHES
+      "https://github\\.com/fmtlib/fmt/releases/download/[0-9]+\\.[0-9]+\\.[0-9]+/fmt-[0-9]+\\.[0-9]+\\.[0-9]+.zip"))
+      MESSAGE(FATAL_ERROR "Unexpected fmtlib URL")
+    ENDIF()
     STRING(REGEX MATCH "[0-9]+\\.[0-9]+\\.[0-9]+" libmt_TAG "${URL}")
     ADD_THIRD_PARTY_DEPENDENCY(libfmt
       "https://github.com/fmtlib/fmt"
