@@ -14388,16 +14388,18 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
       goto next_index;
     }
 
-    {
-      for (uint i= 0; i < table->actual_n_key_parts(cur_index_info); i++)
+    /*
       {
-        if (cur_index_info->key_part[i].key_part_flag & HA_REVERSE_SORT)
+        for (uint i= 0; i < table->actual_n_key_parts(cur_index_info); i++)
         {
-          cause="Reverse-ordered (not supported yet)";
-          goto next_index;
+          if (cur_index_info->key_part[i].key_part_flag & HA_REVERSE_SORT)
+          {
+            cause="Reverse-ordered (not supported yet)";
+            goto next_index;
+          }
         }
       }
-    }
+     */
     
     /*
       This function is called on the precondition that the index is covering.
@@ -16023,22 +16025,46 @@ int QUICK_GROUP_MIN_MAX_SELECT::get_next()
     /*
       At this point this->record contains the current prefix in record format.
     */
-    if (have_min)
+    if (min_max_arg_part &&
+        (min_max_arg_part->key_part_flag & HA_REVERSE_SORT))
     {
-      min_res= next_min();
-      if (min_res == 0)
-        update_min_result();
+      if (have_max)
+      {
+        max_res= next_min();
+        if (max_res == 0)
+          update_max_result();
+      }
+      /* If there is no MIN in the group, there is no MAX either. */
+      if ((have_min && !have_max) ||
+          (have_min && have_max && (max_res == 0)))
+      {
+        min_res= next_max();
+        if (min_res == 0)
+          update_min_result();
+        /* If a MIN was found, a MAX must have been found as well. */
+        DBUG_ASSERT((have_min && !have_max) ||
+                    (have_min && have_max && (min_res == 0)));
+      }
     }
-    /* If there is no MIN in the group, there is no MAX either. */
-    if ((have_max && !have_min) ||
-        (have_max && have_min && (min_res == 0)))
+    else
     {
-      max_res= next_max();
-      if (max_res == 0)
-        update_max_result();
-      /* If a MIN was found, a MAX must have been found as well. */
-      DBUG_ASSERT((have_max && !have_min) ||
-                  (have_max && have_min && (max_res == 0)));
+      if (have_min)
+      {
+        min_res= next_min();
+        if (min_res == 0)
+          update_min_result();
+      }
+      /* If there is no MIN in the group, there is no MAX either. */
+      if ((have_max && !have_min) ||
+          (have_max && have_min && (min_res == 0)))
+      {
+        max_res= next_max();
+        if (max_res == 0)
+          update_max_result();
+        /* If a MIN was found, a MAX must have been found as well. */
+        DBUG_ASSERT((have_max && !have_min) ||
+                    (have_max && have_min && (max_res == 0)));
+      }
     }
     /*
       If this is just a GROUP BY or DISTINCT without MIN or MAX and there
