@@ -586,6 +586,8 @@ CMAKE_DEPENDENT_OPTION(WITH_SBOM "Generate Software Bill of Materials (SBOM)" OF
 IF(WITH_SBOM)
   INCLUDE(generate_sbom)
   GENERATE_SBOM()
+  FILE(READ ${CMAKE_BINARY_DIR}/sbom.json sbom_contents)
+  MESSAGE("SBOM=\n${sbom_contents}")
 ENDIF()
 
 INCLUDE(CPack)
