@@ -16000,8 +16000,12 @@ int QUICK_GROUP_MIN_MAX_SELECT::reset(void)
 
 int QUICK_GROUP_MIN_MAX_SELECT::get_next()
 {
-  int min_res= 0;
-  int max_res= 0;
+  int first_res= 0;
+  int last_res= 0;
+  bool reverse= min_max_arg_part != NULL &&
+    min_max_arg_part->key_part_flag & HA_REVERSE_SORT;
+  bool have_first= reverse ? have_max : have_min;
+  bool have_last= reverse ? have_min : have_max;
 #ifdef HPUX11
   /*
     volatile is required by a bug in the HP compiler due to which the
@@ -16025,46 +16029,32 @@ int QUICK_GROUP_MIN_MAX_SELECT::get_next()
     /*
       At this point this->record contains the current prefix in record format.
     */
-    if (min_max_arg_part &&
-        (min_max_arg_part->key_part_flag & HA_REVERSE_SORT))
+    if (have_first)
     {
-      if (have_max)
+      first_res= next_first();
+      if (first_res == 0)
       {
-        max_res= next_min();
-        if (max_res == 0)
+        if (reverse)
           update_max_result();
-      }
-      /* If there is no MIN in the group, there is no MAX either. */
-      if ((have_min && !have_max) ||
-          (have_min && have_max && (max_res == 0)))
-      {
-        min_res= next_max(true);
-        if (min_res == 0)
+        else
           update_min_result();
-        /* If a MIN was found, a MAX must have been found as well. */
-        DBUG_ASSERT((have_min && !have_max) ||
-                    (have_min && have_max && (min_res == 0)));
       }
     }
-    else
+    /* If there is no FIRST in the group, there is no LAST either. */
+    if ((have_last && !have_first) ||
+        (have_last && have_first && (first_res == 0)))
     {
-      if (have_min)
+      last_res= next_last(true);
+      if (last_res == 0)
       {
-        min_res= next_min();
-        if (min_res == 0)
+        if (reverse)
           update_min_result();
-      }
-      /* If there is no MIN in the group, there is no MAX either. */
-      if ((have_max && !have_min) ||
-          (have_max && have_min && (min_res == 0)))
-      {
-        max_res= next_max();
-        if (max_res == 0)
+        else
           update_max_result();
-        /* If a MIN was found, a MAX must have been found as well. */
-        DBUG_ASSERT((have_max && !have_min) ||
-                    (have_max && have_min && (max_res == 0)));
       }
+      /* If a LAST was found, a FIRST must have been found as well. */
+      DBUG_ASSERT((have_last && !have_first) ||
+                  (have_last && have_first && (last_res == 0)));
     }
     /*
       If this is just a GROUP BY or DISTINCT without MIN or MAX and there
@@ -16076,7 +16066,7 @@ int QUICK_GROUP_MIN_MAX_SELECT::get_next()
                                       make_prev_keypart_map(real_key_parts),
                                       HA_READ_KEY_EXACT);
 
-    result= have_min ? min_res : have_max ? max_res : result;
+    result= have_first ? first_res : have_last ? last_res : result;
   } while (result == HA_ERR_KEY_NOT_FOUND || result == HA_ERR_END_OF_FILE);
 
   if (result == HA_ERR_KEY_NOT_FOUND)
@@ -16109,7 +16099,7 @@ int QUICK_GROUP_MIN_MAX_SELECT::get_next()
     other                if some error occurred
 */
 
-int QUICK_GROUP_MIN_MAX_SELECT::next_min()
+int QUICK_GROUP_MIN_MAX_SELECT::next_first()
 {
   int result= 0;
   DBUG_ENTER("QUICK_GROUP_MIN_MAX_SELECT::next_min");
@@ -16176,23 +16166,23 @@ int QUICK_GROUP_MIN_MAX_SELECT::next_min()
 }
 
 
-/* 
-  Retrieve the maximal key in the next group.
+/*
+  Retrieve the last key in the next group.
 
   SYNOPSIS
-    QUICK_GROUP_MIN_MAX_SELECT::next_max()
+    QUICK_GROUP_MIN_MAX_SELECT::next_last()
 
   DESCRIPTION
-    Lookup the maximal key of the group, and store it into this->record.
+    Lookup the last key of the group, and store it into this->record.
 
   RETURN
     0                    on success
-    HA_ERR_KEY_NOT_FOUND if no MAX key was found that fulfills all conditions.
+    HA_ERR_KEY_NOT_FOUND if no last key was found that fulfills all conditions.
     HA_ERR_END_OF_FILE	 - "" -
     other                if some error occurred
 */
 
-int QUICK_GROUP_MIN_MAX_SELECT::next_max(bool reverse)
+int QUICK_GROUP_MIN_MAX_SELECT::next_last(bool reverse)
 {
   int result;
 
