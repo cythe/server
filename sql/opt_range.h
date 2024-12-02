@@ -1808,9 +1808,9 @@ public:
 private:
   int  next_prefix();
   int  next_min_in_range();
-  int  next_max_in_range();
+  int  next_last_in_range(bool reverse);
   int  next_min();
-  int  next_max();
+  int  next_max(bool reverse=false);
   void update_min_result();
   void update_max_result();
   int cmp_min_max_key(const uchar *key, uint16 length);

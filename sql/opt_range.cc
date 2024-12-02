@@ -16038,7 +16038,7 @@ int QUICK_GROUP_MIN_MAX_SELECT::get_next()
       if ((have_min && !have_max) ||
           (have_min && have_max && (max_res == 0)))
       {
-        min_res= next_max();
+        min_res= next_max(true);
         if (min_res == 0)
           update_min_result();
         /* If a MIN was found, a MAX must have been found as well. */
@@ -16192,7 +16192,7 @@ int QUICK_GROUP_MIN_MAX_SELECT::next_min()
     other                if some error occurred
 */
 
-int QUICK_GROUP_MIN_MAX_SELECT::next_max()
+int QUICK_GROUP_MIN_MAX_SELECT::next_max(bool reverse)
 {
   int result;
 
@@ -16200,7 +16200,7 @@ int QUICK_GROUP_MIN_MAX_SELECT::next_max()
 
   /* Get the last key in the (possibly extended) group. */
   if (min_max_ranges.elements > 0)
-    result= next_max_in_range();
+    result= next_last_in_range(reverse);
   else
     result= file->ha_index_read_map(record, group_prefix,
                                     make_prev_keypart_map(real_key_parts),
@@ -16489,16 +16489,16 @@ int QUICK_GROUP_MIN_MAX_SELECT::next_min_in_range()
 
 
 /*
-  Find the maximal key in a group that satisfies some range conditions for the
+  Find the last key in a group that satisfies some range conditions for the
   min/max argument field.
 
   SYNOPSIS
-    QUICK_GROUP_MIN_MAX_SELECT::next_max_in_range()
+    QUICK_GROUP_MIN_MAX_SELECT::next_last_in_range()
 
   DESCRIPTION
-    Given the sequence of ranges min_max_ranges, find the maximal key that is
-    in the right-most possible range. If there is no such key, then the current
-    group does not have a MAX key that satisfies the WHERE clause. If a key is
+    Given the sequence of ranges min_max_ranges, find the last key that is
+    in the last possible range. If there is no such key, then the current
+    group does not have a last key that satisfies the WHERE clause. If a key is
     found, its value is stored in this->record.
 
   RETURN
@@ -16509,7 +16509,7 @@ int QUICK_GROUP_MIN_MAX_SELECT::next_min_in_range()
     other                if some error
 */
 
-int QUICK_GROUP_MIN_MAX_SELECT::next_max_in_range()
+int QUICK_GROUP_MIN_MAX_SELECT::next_last_in_range(bool reverse)
 {
   ha_rkey_function find_flag;
   key_part_map keypart_map;
@@ -16518,33 +16518,48 @@ int QUICK_GROUP_MIN_MAX_SELECT::next_max_in_range()
 
   DBUG_ASSERT(min_max_ranges.elements > 0);
 
+  /* Start from the last range. */
   for (size_t range_idx= min_max_ranges.elements; range_idx > 0; range_idx--)
-  { /* Search from the right-most range to the left. */
-    get_dynamic(&min_max_ranges, (uchar*)&cur_range, range_idx - 1);
+  {
+    get_dynamic(&min_max_ranges, (uchar*)&cur_range,
+                reverse ? min_max_ranges.elements - range_idx : range_idx - 1);
 
     /*
-      If the current value for the min/max argument is smaller than the left
-      boundary of cur_range, there is no need to check this range.
+      If the current value for the min/max argument is smaller than
+      the left (i.e. min for asc and max for desc) boundary of
+      cur_range, there is no need to check this range.
     */
     if (range_idx != min_max_ranges.elements &&
-        !(cur_range->flag & NO_MIN_RANGE) &&
-        (key_cmp(min_max_arg_part, (const uchar*) cur_range->min_key,
-                 min_max_arg_len) == -1))
+        ((!reverse &&
+          !(cur_range->flag & NO_MIN_RANGE) &&
+          (key_cmp(min_max_arg_part, (const uchar*) cur_range->min_key,
+                   min_max_arg_len) == -1)) ||
+         (reverse &&
+          !(cur_range->flag & NO_MAX_RANGE) &&
+          (key_cmp(min_max_arg_part, (const uchar*) cur_range->max_key,
+                   min_max_arg_len) == -1))))
       continue;
 
-    if (cur_range->flag & NO_MAX_RANGE)
+    if ((!reverse && cur_range->flag & NO_MAX_RANGE) ||
+        (reverse && cur_range->flag & NO_MIN_RANGE))
     {
       keypart_map= make_prev_keypart_map(real_key_parts);
       find_flag= HA_READ_PREFIX_LAST;
     }
     else
     {
-      /* Extend the search key with the upper boundary for this range. */
-      memcpy(group_prefix + real_prefix_len, cur_range->max_key,
-             cur_range->max_length);
+      /*
+        Extend the search key with the right boundary (i.e. upper
+        bound for asc and lower bound for desc) for this range.
+      */
+      memcpy(group_prefix + real_prefix_len,
+             reverse ? cur_range->min_key : cur_range->max_key,
+             reverse ? cur_range->min_length : cur_range->max_length);
       keypart_map= make_keypart_map(real_key_parts);
       find_flag= (cur_range->flag & EQ_RANGE) ?
-                 HA_READ_KEY_EXACT : (cur_range->flag & NEAR_MAX) ?
+                 HA_READ_KEY_EXACT :
+                 ((!reverse && cur_range->flag & NEAR_MAX) ||
+                  (reverse && cur_range->flag & NEAR_MIN)) ?
                  HA_READ_BEFORE_KEY : HA_READ_PREFIX_LAST_OR_PREV;
     }
 
@@ -16558,8 +16573,8 @@ int QUICK_GROUP_MIN_MAX_SELECT::next_max_in_range()
         continue; /* Check the next range. */
 
       /*
-        In no key was found with this upper bound, there certainly are no keys
-        in the ranges to the left.
+        In no key was found with this right boundary, there certainly
+        are no keys in the ranges to the left.
       */
       return result;
     }
@@ -16571,21 +16586,25 @@ int QUICK_GROUP_MIN_MAX_SELECT::next_max_in_range()
     if (key_cmp(index_info->key_part, group_prefix, real_prefix_len))
       continue;                                 // Row not found
 
-    /* If there is a lower limit, check if the found key is in the range. */
-    if ( !(cur_range->flag & NO_MIN_RANGE) )
+    /* If there is a left limit, check if the found key is in the range. */
+    if ( (!reverse && !(cur_range->flag & NO_MIN_RANGE)) ||
+         (reverse && !(cur_range->flag & NO_MAX_RANGE)))
     {
-      int cmp_res= cmp_min_max_key(cur_range->min_key, cur_range->min_length);
+      int cmp_res= reverse ?
+        cmp_min_max_key(cur_range->max_key, cur_range->max_length) :
+        cmp_min_max_key(cur_range->min_key, cur_range->min_length);
       /*
-        The key is outside of the range if: 
-        the interval is open and the key is equal to the minimum boundry
+        The key is outside of the range if:
+        the interval is open and the key is equal to the left boundry
         or
-        the key is less than the minimum
+        the key is to the left of the left boundary
       */
-      if (((cur_range->flag & NEAR_MIN) && cmp_res == 0) ||
+      if ((((!reverse && cur_range->flag & NEAR_MIN) ||
+             (reverse && cur_range->flag & NEAR_MAX)) && cmp_res == 0) ||
           cmp_res < 0)
         continue;
     }
-    /* If we got to this point, the current key qualifies as MAX. */
+    /* If we got to this point, the current key qualifies. */
     return result;
   }
   return HA_ERR_KEY_NOT_FOUND;
