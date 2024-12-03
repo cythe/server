@@ -7089,6 +7089,14 @@ static bool record_compare(TABLE *table, bool vers_from_plain= false)
   bool result= false;
   bool all_values_set= bitmap_is_set_all(&table->has_value_set);
 
+  if (table->s->null_bytes > 0)
+  {
+    table->record[0][table->s->null_bytes - 1]|=
+      256U - (1U << table->s->last_null_bit_pos);
+    if (!(table->s->db_create_options & HA_OPTION_PACK_RECORD))
+      table->record[0][0] |= 1;
+  }
+
   /**
     Compare full record only if:
     - all fields were given values
@@ -7553,6 +7561,20 @@ int Rows_log_event::find_row(rpl_group_info *rgi)
   // We can't use position() - try other methods.
   
   /*
+    We need to set the null bytes to ensure that the filler bit are
+    all set when returning.  There are storage engines that just set
+    the necessary bits on the bytes and don't set the filler bits
+    correctly.
+  */
+  if (table->s->null_bytes > 0)
+  {
+    table->record[0][table->s->null_bytes - 1]|=
+      256U - (1U << table->s->last_null_bit_pos);
+    if (!(table->s->db_create_options & HA_OPTION_PACK_RECORD))
+      table->record[0][0] |= 1;
+  }
+
+  /*
     Save copy of the record in table->record[1]. It might be needed 
     later if linear search is used to find exact match.
    */ 
@@ -7587,16 +7609,6 @@ int Rows_log_event::find_row(rpl_group_info *rgi)
 #ifndef HAVE_valgrind
     DBUG_DUMP("key data", m_key, m_key_info->key_length);
 #endif
-
-    /*
-      We need to set the null bytes to ensure that the filler bit are
-      all set when returning.  There are storage engines that just set
-      the necessary bits on the bytes and don't set the filler bits
-      correctly.
-    */
-    if (table->s->null_bytes > 0)
-      table->record[0][table->s->null_bytes - 1]|=
-        256U - (1U << table->s->last_null_bit_pos);
 
     const enum ha_rkey_function find_flag=
       m_usable_key_parts == m_key_info->user_defined_key_parts
