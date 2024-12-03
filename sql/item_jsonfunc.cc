@@ -1112,7 +1112,7 @@ error:
 
 static int alloc_tmp_paths(uint n_paths,
                            json_path_with_flags **paths,
-                           String **tmp_paths, MEM_ROOT *current_mem_root)
+                           String **tmp_paths)
 {
   if (n_paths > 0)
   {
@@ -1163,12 +1163,6 @@ Item_json_str_multipath::~Item_json_str_multipath()
 
 bool Item_json_str_multipath::fix_fields(THD *thd, Item **ref)
 {
-  /* Allocating twice the memory because there could be "multiple paths". */
-  if (!mem_root_inited)
-    init_alloc_root(PSI_NOT_INSTRUMENTED, &current_mem_root,
-                    2*BLOCK_SIZE_JSON_DYN_ARRAY, 0, MYF(0));
-  mem_root_inited= true;
-
   if (!tmp_paths)
   {
     /*
@@ -1185,7 +1179,7 @@ bool Item_json_str_multipath::fix_fields(THD *thd, Item **ref)
     */
     n_paths= get_n_paths();
 
-    if (alloc_tmp_paths(n_paths, &paths, &tmp_paths, &current_mem_root))
+    if (alloc_tmp_paths(n_paths, &paths, &tmp_paths))
       return true;
   }
 
@@ -1848,20 +1842,14 @@ return_null:
 
 bool Item_func_json_contains_path::fix_fields(THD *thd, Item **ref)
 {
-  /* Allocating twice memory because there could be "multiple paths". */
-  if (!mem_root_inited)
-    init_alloc_root(PSI_NOT_INSTRUMENTED, &current_mem_root,
-                    2*BLOCK_SIZE_JSON_DYN_ARRAY, 0, MYF(0));
-  mem_root_inited= true;
-
   /*
     See comments on Item_json_str_multipath::fix_fields regarding
     the aim of the condition 'if (!tmp_paths)'.
   */
   if (!tmp_paths)
   {
-    if (alloc_tmp_paths(arg_count-2, &paths, &tmp_paths, &current_mem_root) ||
-        (p_found= (bool *) alloc_root(&current_mem_root,
+    if (alloc_tmp_paths(arg_count-2, &paths, &tmp_paths) ||
+        (p_found= (bool *) alloc_root(_current_thd()->active_stmt_arena_to_use()->mem_root,
                                        (arg_count-2)*sizeof(bool))) == NULL)
       return true;
   }
@@ -1877,6 +1865,11 @@ bool Item_func_json_contains_path::fix_length_and_dec(THD *thd)
   set_maybe_null();
 
   mark_constant_paths(paths, args+2, arg_count-2);
+
+  if (!mem_root_inited)
+    init_alloc_root(PSI_NOT_INSTRUMENTED, &current_mem_root,
+                    BLOCK_SIZE_JSON_DYN_ARRAY, 0, MYF(0));
+  mem_root_inited= true;
 
   mem_root_dynamic_array_init(&current_mem_root, PSI_NOT_INSTRUMENTED,
                               &json_depth_array, sizeof(int), NULL,
@@ -3727,7 +3720,7 @@ String *Item_func_json_insert::val_str(String *str)
   {
     json_path_with_flags *c_path= paths + n_path;
     const char *v_to;
-    json_path_step_t *lp, *psteps= (json_path_step_t*)(c_path->p.steps.buffer);
+    json_path_step_t *lp= NULL;
     int corrected_n_item;
 
     if (!c_path->parsed)
@@ -3755,12 +3748,12 @@ String *Item_func_json_insert::val_str(String *str)
                     (const uchar *) js->ptr() + js->length());
     je.killed_ptr= (uchar*)&thd->killed;
 
-    if (c_path->p.last_step < psteps)
+    if (c_path->p.last_step < (json_path_step_t*)c_path->p.steps.buffer)
       goto v_found;
 
     c_path->cur_step= &(c_path->p.steps);
     tmp_ptr= (json_path_step_t*)(c_path->cur_step->buffer);
-    if (c_path->p.last_step >= psteps &&
+    if (c_path->p.last_step >= (json_path_step_t*)c_path->p.steps.buffer &&
         json_find_path(&je, &c_path->p, &tmp_ptr, &json_depth_array))
     {
       if (je.s.error)
@@ -3771,8 +3764,7 @@ String *Item_func_json_insert::val_str(String *str)
     if (json_read_value(&je))
       goto js_error;
 
-    lp= (json_path_step_t*)mem_root_dynamic_array_increment(&c_path->p.steps,
-                                            (uchar*)(c_path->p.last_step), 1);
+    lp= c_path->p.last_step+1;
     if (lp->type & JSON_PATH_ARRAY)
     {
       int n_item= 0;
