@@ -114,13 +114,6 @@ FUNCTION(GENERATE_SBOM)
   # -Dncurses_DESCRIPTION="A fake extra dependency"
   SET(ALL_THIRD_PARTY ${ALL_SUBMODULES} ${EXTRA_SBOM_DEPENDENCIES})
 
-  IF(TARGET ha_connect OR TARGET connect)
-     ADD_THIRD_PARTY_DEPENDENCY(minizip
-      "https://github.com/zlib-ng/minizip-ng"
-      "" 252588f ""
-      "Vendored minizip, inside connect storage engine, storage/connect/zip.c et al")
-  ENDIF()
-
   IF(TARGET libfmt)
     ExternalProject_GET_PROPERTY(libfmt URL)
     IF(NOT ("${URL}" MATCHES
@@ -146,7 +139,8 @@ FUNCTION(GENERATE_SBOM)
       "${pcre2_TAG}" "${pcre2_TAG}" "${pcre2_VERSION}" "")
   ENDIF()
 
-  IF(TARGET zlib)
+  # ZLIB
+  IF(TARGET zlib OR TARGET ha_connect OR TARGET connect)
     # Path to the zlib.h file
     SET(ZLIB_HEADER_PATH "${PROJECT_SOURCE_DIR}/zlib/zlib.h")
     # Variable to store the extracted version
@@ -167,8 +161,15 @@ FUNCTION(GENERATE_SBOM)
     ELSE()
       MESSAGE(FATAL_ERROR "ZLIB_VERSION definition not found in ${ZLIB_HEADER_PATH}")
     ENDIF()
-    ADD_THIRD_PARTY_DEPENDENCY(zlib "https://github.com/madler/zlib"
+    IF(TARGET zlib)
+      ADD_THIRD_PARTY_DEPENDENCY(zlib "https://github.com/madler/zlib"
       "v${ZLIB_VERSION}" "v${ZLIB_VERSION}" "${ZLIB_VERSION}" "Vendored zlib included into server source")
+    ENDIF()
+    IF(TARGET ha_connect OR TARGET connect)
+      SET(minizip_PURL "pkg:github/madler/zlib@${ZLIB_VERSION}?path=contrib/minizip")
+      ADD_THIRD_PARTY_DEPENDENCY(minizip "https://github.com/madler/zlib?path=contrib/minizip"
+      "v${ZLIB_VERSION}-minizip" "v${ZLIB_VERSION}-minizip" "${ZLIB_VERSION}" "Vendored zlib included into server source")
+    ENDIF()
   ENDIF()
 
   SET(sbom_components "")
