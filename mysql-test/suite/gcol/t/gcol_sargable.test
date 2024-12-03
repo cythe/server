@@ -5,6 +5,8 @@
 create table t1 (a int, vcol1 int as (a+1), index(vcol1));
 insert into t1 (a) select seq from seq_1_to_100;
 explain select * from t1 where a+1=2;
+--echo # Try renaming the table
+explain select * from t1 as TBL where TBL.a+1=2;
 explain select * from t1 where a+1<=2;
 explain select * from t1 where a+1<2;
 explain select * from t1 where a+1>100;
@@ -17,6 +19,14 @@ explain select * from t1 where (a+1) in (1,2,3,4);
 --echo # Check UPDATE/DELETE:
 explain delete from t1 where a+1=2;
 explain update t1 set a=a+1 where a+1=2;
+
+--echo # Try merged VIEWs:
+create view v1 as select * from t1;
+explain select * from v1 where a+1=2;
+create view v2 as select a as A_COL from t1;
+explain select * from v2 where A_COL+1=2;
+drop view v1;
+drop view v2;
 
 set names utf8mb4;
 select @@collation_connection;

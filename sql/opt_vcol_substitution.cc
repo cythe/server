@@ -93,7 +93,13 @@ class Vcol_subst_context
 {
  public:
   THD *thd;
+  /* Indexed virtual columns that we can try substituting */
   List<Field> vcol_fields;
+
+  /*
+    How many times substitution was done. Used to determine whether to print
+    the conversion info to the Optimizer Trace
+  */
   uint subst_count;
 
   Vcol_subst_context(THD *thd_arg) : thd(thd_arg) {}
@@ -101,15 +107,15 @@ class Vcol_subst_context
 
 
 static
-void collect_indexed_vcols_for_table(TABLE *tbl, List<Field> *vcol_fields)
+void collect_indexed_vcols_for_table(TABLE *table, List<Field> *vcol_fields)
 {
-  for (uint i=0; i < tbl->s->keys; i++)
+  for (uint i=0; i < table->s->keys; i++)
   {
     // note: we could also support histograms here
-    if (!tbl->keys_in_use_for_query.is_set(i))
+    if (!table->keys_in_use_for_query.is_set(i))
       continue;
 
-    KEY *key= &tbl->key_info[i];
+    KEY *key= &table->key_info[i];
     for (uint kp=0; kp < key->user_defined_key_parts; kp++)
     {
       Field *field= key->key_part[kp].field;
@@ -163,7 +169,7 @@ void subst_vcols_in_join_list(Vcol_subst_context *ctx,
 
   while ((table= li++))
   {
-    if (auto nested_join= table->nested_join)
+    if (NESTED_JOIN* nested_join= table->nested_join)
       subst_vcols_in_join_list(ctx, &nested_join->join_list);
 
     if (table->on_expr)
@@ -209,15 +215,12 @@ void substitute_indexed_vcols_for_table(TABLE *table, Item *item)
 
 
 /*
-  Check if passed item matches Virtual Column definition for a column saved in
-  the context.
-
-  @todo: this cannot handle VIEW columns currently. View columns are wrapped
-  in Item_direct_view_ref objects which do not comsider themselves equal to
-  Item_field objects they're wrapping.
+  @brief
+    Check if passed item matches Virtual Column definition for some column in
+    the Vcol_subst_context list.
 */
 
-static Field *is_vcol_expr(Vcol_subst_context *ctx, Item *item)
+static Field *is_vcol_expr(Vcol_subst_context *ctx, const Item *item)
 {
   table_map map= item->used_tables();
   if ((map!=0) && !(map & OUTER_REF_TABLE_BIT) &&
@@ -236,8 +239,10 @@ static Field *is_vcol_expr(Vcol_subst_context *ctx, Item *item)
 
 
 /*
-  Produce a warning similar to raise_note_cannot_use_key_part().
+  @brief
+    Produce a warning similar to raise_note_cannot_use_key_part().
 */
+
 void print_vcol_subst_warning(THD *thd, Field *field, Item *expr,
                               const char *cause)
 {
@@ -302,15 +307,15 @@ bool subst_vcol_if_compatible(Vcol_subst_context *ctx,
   {
     if (thd->give_notes_for_unusable_keys())
       print_vcol_subst_warning(thd, vcol_field, vcol_expr, fail_cause);
-    return false;
+    return true;
   }
   Item_field *itf= new (thd->mem_root) Item_field(thd, vcol_field);
   if (!itf)
-    return false;
+    return true;
   DBUG_ASSERT(itf->fixed());
   thd->change_item_tree(vcol_expr_ref, itf);
   ctx->subst_count++;
-  return true;
+  return false;
 }
 
 
@@ -320,22 +325,13 @@ Item* Item_bool_rowready_func2::vcol_subst_transformer(THD *thd, uchar *arg)
   Vcol_subst_context *ctx= (Vcol_subst_context*)arg;
   Field *vcol_field;
   Item **vcol_expr;
-  //Item *const_expr;
+
   if (!args[0]->used_tables() && (vcol_field= is_vcol_expr(ctx, args[1])))
-  {
-    //const_expr= args[0];
     vcol_expr= &args[1];
-  }
   else if (!args[1]->used_tables() && (vcol_field= is_vcol_expr(ctx, args[0])))
-  {
-    //const_expr= args[1];
     vcol_expr= &args[0];
-  }
   else
-  {
-    /* No substitution */
-    return this;
-  }
+    return this; /* No substitution */
 
   subst_vcol_if_compatible(ctx, this, vcol_expr, vcol_field);
   return this;
@@ -371,8 +367,11 @@ Item* Item_func_null_predicate::vcol_subst_transformer(THD *thd, uchar *arg)
 Item* Item_func_in::vcol_subst_transformer(THD *thd, uchar *arg)
 {
   Vcol_subst_context *ctx= (Vcol_subst_context*)arg;
+
+  /* Check that all arguments inside IN() are constants */
   if (!compatible_types_scalar_bisection_possible())
     return this;
+
   Field *vcol_field;
   if ((vcol_field= is_vcol_expr(ctx, args[0])))
   {

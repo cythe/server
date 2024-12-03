@@ -4,6 +4,10 @@ insert into t1 (a) select seq from seq_1_to_100;
 explain select * from t1 where a+1=2;
 id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
 1	SIMPLE	t1	ref	vcol1	vcol1	5	const	1	
+# Try renaming the table
+explain select * from t1 as TBL where TBL.a+1=2;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	TBL	ref	vcol1	vcol1	5	const	1	
 explain select * from t1 where a+1<=2;
 id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
 1	SIMPLE	t1	range	vcol1	vcol1	5	NULL	1	Using index condition
@@ -35,6 +39,17 @@ id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
 explain update t1 set a=a+1 where a+1=2;
 id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
 1	SIMPLE	t1	range	vcol1	vcol1	5	NULL	1	Using where; Using buffer
+# Try merged VIEWs:
+create view v1 as select * from t1;
+explain select * from v1 where a+1=2;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	t1	ref	vcol1	vcol1	5	const	1	
+create view v2 as select a as A_COL from t1;
+explain select * from v2 where A_COL+1=2;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	t1	ref	vcol1	vcol1	5	const	1	
+drop view v1;
+drop view v2;
 set names utf8mb4;
 select @@collation_connection;
 @@collation_connection
