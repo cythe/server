@@ -1807,9 +1807,9 @@ public:
   QUICK_RANGE_SELECT *quick_prefix_select;/* For retrieval of group prefixes. */
 private:
   int  next_prefix();
-  int  next_min_in_range();
+  int  next_first_in_range(bool reverse);
   int  next_last_in_range(bool reverse);
-  int  next_first();
+  int  next_first(bool reverse=false);
   int  next_last(bool reverse=false);
   void update_min_result();
   void update_max_result();

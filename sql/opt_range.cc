@@ -16031,7 +16031,7 @@ int QUICK_GROUP_MIN_MAX_SELECT::get_next()
     */
     if (have_first)
     {
-      first_res= next_first();
+      first_res= next_first(reverse);
       if (first_res == 0)
       {
         if (reverse)
@@ -16044,7 +16044,7 @@ int QUICK_GROUP_MIN_MAX_SELECT::get_next()
     if ((have_last && !have_first) ||
         (have_last && have_first && (first_res == 0)))
     {
-      last_res= next_last(true);
+      last_res= next_last(reverse);
       if (last_res == 0)
       {
         if (reverse)
@@ -16099,7 +16099,7 @@ int QUICK_GROUP_MIN_MAX_SELECT::get_next()
     other                if some error occurred
 */
 
-int QUICK_GROUP_MIN_MAX_SELECT::next_first()
+int QUICK_GROUP_MIN_MAX_SELECT::next_first(bool reverse)
 {
   int result= 0;
   DBUG_ENTER("QUICK_GROUP_MIN_MAX_SELECT::next_min");
@@ -16107,7 +16107,7 @@ int QUICK_GROUP_MIN_MAX_SELECT::next_first()
   /* Find the MIN key using the eventually extended group prefix. */
   if (min_max_ranges.elements > 0)
   {
-    if ((result= next_min_in_range()))
+    if ((result= next_first_in_range(reverse)))
       DBUG_RETURN(result);
   }
   else
@@ -16136,7 +16136,8 @@ int QUICK_GROUP_MIN_MAX_SELECT::next_first()
       key_copy(tmp_key_buff, record, index_info, max_used_key_length);
       result= file->ha_index_read_map(record, tmp_key_buff,
                                       make_keypart_map(real_key_parts),
-                                      HA_READ_AFTER_KEY);
+                                      reverse ? HA_READ_BEFORE_KEY :
+                                                HA_READ_AFTER_KEY);
       /*
         Check if the new record belongs to the current group by comparing its
         prefix with the group's prefix. If it is from the next group, then the
@@ -16366,7 +16367,7 @@ QUICK_GROUP_MIN_MAX_SELECT::cmp_min_max_key(const uchar *key, uint16 length)
     other                if some error
 */
 
-int QUICK_GROUP_MIN_MAX_SELECT::next_min_in_range()
+int QUICK_GROUP_MIN_MAX_SELECT::next_first_in_range(bool reverse)
 {
   ha_rkey_function find_flag;
   key_part_map keypart_map;
@@ -16378,18 +16379,26 @@ int QUICK_GROUP_MIN_MAX_SELECT::next_min_in_range()
 
   for (uint range_idx= 0; range_idx < min_max_ranges.elements; range_idx++)
   { /* Search from the left-most range to the right. */
-    get_dynamic(&min_max_ranges, (uchar*)&cur_range, range_idx);
+    get_dynamic(&min_max_ranges, (uchar*)&cur_range,
+                reverse ? min_max_ranges.elements - range_idx - 1 : range_idx);
 
     /*
       If the current value for the min/max argument is bigger than the right
       boundary of cur_range, there is no need to check this range.
     */
-    if (range_idx != 0 && !(cur_range->flag & NO_MAX_RANGE) &&
-        (key_cmp(min_max_arg_part, (const uchar*) cur_range->max_key,
-                 min_max_arg_len) == 1))
+    if (range_idx != 0 &&
+        ((!reverse &&
+          !(cur_range->flag & NO_MAX_RANGE) &&
+          (key_cmp(min_max_arg_part, (const uchar*) cur_range->max_key,
+                   min_max_arg_len) == 1)) ||
+         (reverse &&
+          !(cur_range->flag & NO_MIN_RANGE) &&
+          (key_cmp(min_max_arg_part, (const uchar*) cur_range->min_key,
+                   min_max_arg_len) == 1))))
       continue;
 
-    if (cur_range->flag & NO_MIN_RANGE)
+    if ((!reverse && cur_range->flag & NO_MIN_RANGE) ||
+        (reverse && cur_range->flag & NO_MAX_RANGE))
     {
       keypart_map= make_prev_keypart_map(real_key_parts);
       find_flag= HA_READ_KEY_EXACT;
@@ -16397,11 +16406,14 @@ int QUICK_GROUP_MIN_MAX_SELECT::next_min_in_range()
     else
     {
       /* Extend the search key with the lower boundary for this range. */
-      memcpy(group_prefix + real_prefix_len, cur_range->min_key,
-             cur_range->min_length);
+      memcpy(group_prefix + real_prefix_len,
+             reverse ? cur_range->max_key : cur_range->min_key,
+             reverse ? cur_range->max_length : cur_range->min_length);
       keypart_map= make_keypart_map(real_key_parts);
       find_flag= (cur_range->flag & (EQ_RANGE | NULL_RANGE)) ?
-                 HA_READ_KEY_EXACT : (cur_range->flag & NEAR_MIN) ?
+                 HA_READ_KEY_EXACT :
+                 ((!reverse && cur_range->flag & NEAR_MIN) ||
+                  (reverse && cur_range->flag & NEAR_MAX)) ?
                  HA_READ_AFTER_KEY : HA_READ_KEY_OR_NEXT;
     }
 
@@ -16444,16 +16456,20 @@ int QUICK_GROUP_MIN_MAX_SELECT::next_min_in_range()
     }
 
     /* If there is an upper limit, check if the found key is in the range. */
-    if ( !(cur_range->flag & NO_MAX_RANGE) )
+    if ((!reverse && !(cur_range->flag & NO_MAX_RANGE)) ||
+         (reverse && !(cur_range->flag & NO_MIN_RANGE)))
     {
-      int cmp_res= cmp_min_max_key(cur_range->max_key, cur_range->max_length);
+      int cmp_res= reverse ?
+        cmp_min_max_key(cur_range->min_key, cur_range->min_length) :
+        cmp_min_max_key(cur_range->max_key, cur_range->max_length);
       /*
         The key is outside of the range if: 
         the interval is open and the key is equal to the maximum boundry
         or
         the key is greater than the maximum
       */
-      if (((cur_range->flag & NEAR_MAX) && cmp_res == 0) ||
+      if ((((!reverse && cur_range->flag & NEAR_MAX) ||
+            (reverse && cur_range->flag & NEAR_MIN)) && cmp_res == 0) ||
           cmp_res > 0)
       {
         result= HA_ERR_KEY_NOT_FOUND;
